@@ -1,0 +1,5 @@
+firmware/.pio/
+firmware/include/secrets.h
+.vscode/
+**/.pio/
+**/secrets.h
