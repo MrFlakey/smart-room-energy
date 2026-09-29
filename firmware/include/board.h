@@ -1,5 +1,6 @@
 // Everything that differs between boards lives here, so the rest of the
-// firmware stays the same when moving from the Uno WiFi Rev2 to an ESP32.
+// firmware is the same on the ESP32 (current board) and the Uno WiFi Rev2.
+// Wiring for the ESP32 is in docs/esp32-wiring.md.
 #pragma once
 #include <Arduino.h>
 
@@ -31,11 +32,12 @@
   }
 
 #elif defined(ESP32)
+  // ESP32 DevKit v1. GPIOs are 3.3 V and NOT 5 V tolerant.
   #include <WiFi.h>
   #define BOARD_NAME "esp32"
 
   const uint8_t PIN_PIR        = 27;
-  const uint8_t PIN_FAN        = 25;
+  const uint8_t PIN_FAN        = 25;  // fan module signal (PWM)
   const uint8_t PIN_BTN_LIGHTS = 14;
   const uint8_t PIN_LED1       = 26;
   const uint8_t PIN_LED2       = 33;
@@ -46,11 +48,17 @@
   const uint8_t PIN_LM35       = 34;  // ADC1 only: ADC2 is unusable with Wi-Fi on
   const uint8_t PIN_LIGHT      = 35;
   const uint8_t PIN_KNOB       = 32;
+  // I2C uses the default pins: SDA = 21, SCL = 22
 
+  // Light sensor and knob are powered from 3V3, so that is their full scale
   const uint16_t SENSOR_VCC_MV = 3300;
 
-  inline void boardInit() { analogReadResolution(12); }
+  inline void boardInit() {
+    analogReadResolution(12);
+    analogSetAttenuation(ADC_11db);  // 0..~3.1 V input range
+  }
 
+  // Uses the chip's factory calibration, so the LM35 reads true millivolts
   inline uint16_t readMillivolts(uint8_t pin) {
     return analogReadMilliVolts(pin);
   }

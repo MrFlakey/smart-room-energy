@@ -37,7 +37,7 @@ Every payload is JSON except `status`. The same messages appear on the USB seria
 
 ```json
 {"mode":"auto","occ":1,"set_c":25,"led1":180,"led2":180,"fan":0,
- "lights_override":false,"fan_override":false,"board":"uno_wifi_rev2"}
+ "lights_override":false,"fan_override":false,"board":"esp32"}
 ```
 
 ## event

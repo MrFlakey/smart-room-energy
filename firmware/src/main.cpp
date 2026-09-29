@@ -10,6 +10,10 @@
 #include "comms.h"
 #include "room_logic.h"
 
+#if defined(ESP32)
+static_assert(!LEDS_ACTIVE_LOW, "LEDS_ACTIVE_LOW would put 5 V on ESP32 pins: wire the LEDs pin -> resistor -> LED -> GND");
+#endif
+
 static RoomController room;
 static EnergyMeter energy;
 static SensorReadings last;
@@ -28,8 +32,9 @@ static uint8_t clampPwm(int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
 
 static void applyOutputs() {
   RoomOutputs o = room.outputs();
-  setPwm(PIN_LED1, o.led1);
-  setPwm(PIN_LED2, o.led2);
+  // Active-low LEDs are wired from the metered 5 V rail into the pin (see docs/wattmeter-wiring.md)
+  setPwm(PIN_LED1, LEDS_ACTIVE_LOW ? 255 - o.led1 : o.led1);
+  setPwm(PIN_LED2, LEDS_ACTIVE_LOW ? 255 - o.led2 : o.led2);
   setPwm(PIN_FAN, o.fan);
 }
 
