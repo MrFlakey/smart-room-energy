@@ -1,69 +1,76 @@
-# Smart Room Energy Management
+# Smart Room Energy Management: ESP32 firmware
 
-This is the room controller for an **ESP32 DevKit v1** (the Arduino Uno WiFi Rev2 is still supported). It detects occupancy, temperature, light and power, runs the energy-saving rules on the board, drives two LED "lights" and a DC fan, and streams everything over MQTT to a digital twin.
+Author: Mohamed Khamis
 
-## Hardware (ESP32)
+A smart room that saves energy on its own. An ESP32 watches occupancy, the door, temperature, daylight and power use, then switches the lights and the "AC" (a DC fan) only when they are needed. Everything is shown live on a 3D digital twin over MQTT: [Smart-Room-Digital-Twin](https://github.com/MrFlakey/Smart-Room-Digital-Twin).
 
-**ESP32 pins are 3.3 V only.** The full wiring guide, with power rails and a safety checklist, is in [docs/esp32-wiring.md](docs/esp32-wiring.md).
+This repository holds the ESP-IDF driver components for every sensor and actuator in the room.
 
-| Part | ESP32 pin | Power | Notes |
-|---|---|---|---|
-| PIR | GPIO27 | VIN (5 V) | |
-| Ultrasonic TRIG / ECHO | GPIO18 / GPIO19 | VIN (5 V) | **ECHO needs a 1 kΩ / 2 kΩ divider** |
-| LM35 | GPIO34 | VIN (5 V) | |
-| Ambient light sensor | GPIO35 | 3V3 | Set `LIGHT_INVERTED` in `config.h` if it reads lower when brighter |
-| Rotation sensor | GPIO32 | 3V3 | Sets the temperature setpoint, 20 to 30 °C |
-| SEN0291 wattmeter | SDA GPIO21 / SCL GPIO22 | **3V3** | IN+ from VIN, IN− to the fan. See [docs/wattmeter-wiring.md](docs/wattmeter-wiring.md) |
-| Fan module | GPIO25 (signal) | Wattmeter IN− (5 V) | See [docs/fan-wiring.md](docs/fan-wiring.md) |
-| LED 1 / LED 2 | GPIO26 / GPIO33 | from the pin | 220 Ω (or 100 Ω for brighter), short leg to GND |
-| Buttons B1 lights / B2 fan / B3 mode | GPIO14 / GPIO13 / GPIO23 | none | Button between the pin and GND |
+## How the room behaves
 
-The Uno WiFi Rev2 pins are in `firmware/include/board.h`.
+- **Occupancy:** the PIR sensor detects people; the room counts as empty after 15 s without motion.
+- **Door:** an ultrasonic sensor watches the door. If it stays open for about 10 s, the AC pauses and resumes when it closes.
+- **AC:** the fan stands in for the AC. A rotation knob sets the target temperature, the fan speed grows with how far the room is above target, and it is always off in an empty room.
+- **Lights:** two LEDs are dimmed from the ambient light sensor (daylight harvesting), only while the room is occupied.
+- **Buttons:** B1 toggles the lights, B2 toggles the AC, B3 switches Auto/Manual. In Auto a press overrides the automatic control until the room is empty.
+- **Energy:** a DFRobot SEN0291 wattmeter measures live power, total energy and the percentage saved against "always on".
+- **Reliability:** the room runs offline on its own. A failed sensor switches off what depends on it and is reported to the twin.
 
-## Setup
+## Hardware
 
-1. Install [PlatformIO](https://platformio.org/install), either the VS Code extension or `pip install platformio`.
-2. Copy `firmware/include/secrets.example.h` to `firmware/include/secrets.h` and fill in your Wi-Fi and MQTT broker details.
-3. Plug in the ESP32 over USB, then build and upload. If the upload hangs on "Connecting...", hold the board's **BOOT** button until it starts.
-   ```
-   cd firmware
-   pio run -t upload        # builds for the ESP32 by default
-   pio device monitor
-   ```
-4. Optional: run the control-logic tests on your PC with `pio test -e native`.
+| Part | Model |
+|---|---|
+| Board | ESP32 DevKit v1 |
+| Motion | PIR sensor |
+| Door | HC-SR04 style ultrasonic sensor |
+| Temperature | LM35 |
+| Ambient light | analog light sensor |
+| Target temperature | rotation sensor (potentiometer) |
+| Power | DFRobot SEN0291 I2C wattmeter |
+| Controls | 3 pushbuttons |
+| Lights | 2 LEDs |
+| AC | DC fan module |
 
-To run without Wi-Fi, set `ENABLE_MQTT 0` in `config.h`. Everything still works over serial.
+The pin map is in [`firmware/main/board_pins.h`](firmware/main/board_pins.h) and the full wiring table is in [`firmware/README.md`](firmware/README.md). ESP32 pins are 3.3 V only; the ultrasonic ECHO line needs a 1 kΩ / 2 kΩ divider.
 
-## How it behaves (auto mode)
+## Drivers
 
-- **Occupied** means the PIR fired in the last 60 s or something is within 100 cm of the ultrasonic sensor.
-- **Lights** come on when the room is occupied and dark, and dim as daylight rises. They turn off 5 minutes after the last detection.
-- **Fan** turns on above the setpoint and speeds up to 100% at 3 °C over it. It turns off 1 °C below the setpoint, or 5 minutes after the last detection.
-- **Buttons:** B1 and B2 override the lights and fan until the room is vacant. B3 toggles manual mode, where only buttons and commands control the loads.
-- **Energy:** power from the SEN0291 is integrated into Wh.
+Written for **ESP-IDF v6.0** using only the current IDF drivers (ADC oneshot with calibration, `i2c_master`, LEDC, GPIO, `esp_timer`).
 
-All thresholds are in `firmware/lib/room_logic/src/room_logic.h` (`RoomSettings`) and `firmware/include/config.h`.
+| Component | Part |
+|---|---|
+| `analog_in` | shared ADC1 helper used by the analog drivers |
+| `lm35` | temperature |
+| `light_sensor` | ambient light |
+| `rotation_sensor` | target temperature knob |
+| `hcsr04` | ultrasonic distance |
+| `pir` | motion |
+| `sen0291` | I2C wattmeter |
+| `button` | debounced pushbuttons with callbacks |
+| `led` | dimmable LEDs |
+| `fan` | PWM fan module |
 
-## Talking to it
+Every driver works the same way: fill a config struct with its `*_DEFAULT_CONFIG(...)` macro, call `*_create()` to get a handle, then use the read/set functions. The reference for each driver is in [`firmware/README.md`](firmware/README.md) and in its folder under [`firmware/components/`](firmware/components).
 
-See [docs/mqtt-contract.md](docs/mqtt-contract.md) for the topics and JSON the digital twin uses. You can also type commands such as `{"fan":200}` or `{"mode":"manual"}` into the serial monitor.
+## Build and flash
 
-## Using the Uno WiFi Rev2 instead
+1. Install ESP-IDF v6.0 (for example with the ESP-IDF VS Code extension).
+2. Open the `firmware` folder.
+3. Set the target to `esp32`, pick the board's serial port, then **Build, Flash and Monitor**.
 
-Build with `pio run -e uno_wifi_rev2 -t upload`. The Rev2 pin map is in `board.h`. On the Rev2 you can also wire the LEDs through the wattmeter by setting `LEDS_ACTIVE_LOW = true`.
-
-## Project layout
+From a terminal with ESP-IDF loaded:
 
 ```
-firmware/
-  include/board.h        pins + per-board helpers (ESP32 / Rev2)
-  include/config.h       timing, topics, sensor settings
-  lib/room_logic/        control rules + energy meter (no Arduino code, unit tested)
-  src/main.cpp           scheduler, outputs, command handling
-  src/sensors.*          PIR, ultrasonic, LM35, light, knob, SEN0291
-  src/buttons.*          debounced buttons
-  src/comms.*            serial + MQTT
-  test/                  native unit tests
-docs/esp32-wiring.md     full wiring guide
-docs/mqtt-contract.md    interface for the digital twin
+cd firmware
+idf.py set-target esp32
+idf.py -p <PORT> flash monitor
 ```
+
+## Branches
+
+- `main`: the driver components with an empty `app_main`.
+- `testing`: hardware tests (PIR + fan) and per-driver documentation.
+
+## Network
+
+The ESP32 talks MQTT to a local Mosquitto broker on base topic `smartroom/room1/`. The message format is defined in the twin repository's [`docs/mqtt-contract.md`](https://github.com/MrFlakey/Smart-Room-Digital-Twin/blob/main/docs/mqtt-contract.md).
