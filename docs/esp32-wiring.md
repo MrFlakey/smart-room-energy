@@ -1,70 +1,80 @@
-# Wiring everything to the ESP32
+# ESP32 wiring
 
-This guide assumes a common **ESP32 DevKit v1** (the 30-pin ESP-WROOM-32 board). Other ESP32 dev boards use the same GPIO numbers, but the pins may sit in different places. Go by the **GPIO number printed next to each pin** (for example "D25" or "G25" means GPIO25).
+Author: Mohamed Khamis
 
-## The one rule that's different from the Uno
+How every DFRobot Gravity module in the Smart Room kit connects to the ESP32 DevKit v1 (30-pin). The pin numbers match `firmware/main/board_pins.h`.
 
-**ESP32 pins work at 3.3 V and are not 5 V tolerant.** Putting 5 V on any GPIO can damage the chip. Some of your parts need 5 V to run, which is fine, as long as nothing sends 5 V *back into* a GPIO pin. The only part that does that is the ultrasonic sensor's ECHO pin, which needs a simple two-resistor voltage divider (see below).
+![ESP32 wiring diagram](esp32-wiring-diagram.png)
 
-## Power rails on the board
+More detail: [wattmeter-wiring.md](wattmeter-wiring.md) and [fan-wiring.md](fan-wiring.md).
+
+## Parts
+
+| Part | DFRobot SKU | Type |
+|---|---|---|
+| PIR motion sensor | SEN0018 | digital |
+| Ultrasonic sensor (URM09, analog) | SEN0307 | analog |
+| Temperature sensor (LM35) | DFR0023 | analog |
+| Ambient light sensor | DFR0026 | analog |
+| Rotation sensor (10-turn) | DFR0058 | analog |
+| Wattmeter (I2C) | SEN0291 | I2C |
+| 130 DC motor module (the "AC" fan) | DFR0411 | digital / PWM |
+| LED module × 2 | DFR0021 | digital / PWM |
+| Push button module × 3 | DFR0029 | digital |
+
+Gravity cables: red = VCC, black = GND, green or blue = signal.
+
+## Connections
+
+| Part | Signal | ESP32 pin | VCC | GND |
+|---|---|---|---|---|
+| Temperature · DFR0023 | A | GPIO34 | 5 V (VIN) | GND |
+| Ambient light · DFR0026 | A | GPIO35 | 3V3 | GND |
+| Rotation · DFR0058 | A | GPIO32 | 3V3 | GND |
+| Ultrasonic · SEN0307 | A | GPIO33 | 3V3 (+) | GND (−) |
+| PIR · SEN0018 | D | GPIO27 | 3V3 | GND |
+| Wattmeter · SEN0291 | C (SCL) / D (SDA) | GPIO22 / GPIO21 | 3V3 (+) | GND (−) |
+| Wattmeter power side | IN+ / IN− | – | IN+ from 5 V (VIN), IN− to the motor's VCC | – |
+| DC motor · DFR0411 | D (PWM) | GPIO25 | from SEN0291 IN− | GND |
+| LED 1 · DFR0021 | D (PWM) | GPIO26 | 3V3 | GND |
+| LED 2 · DFR0021 | D (PWM) | GPIO19 | 3V3 | GND |
+| Button 1 (Lights) · DFR0029 | D | GPIO14 | 3V3 | GND |
+| Button 2 (AC) · DFR0029 | D | GPIO13 | 3V3 | GND |
+| Button 3 (Auto/Manual) · DFR0029 | D | GPIO23 | 3V3 | GND |
+
+SEN0291 I2C address: 0x45 (both address switches at 1).
+
+## Power rails
 
 | Board pin | What it gives | Use it for |
 |---|---|---|
-| **VIN** (sometimes marked 5V) | About 5 V straight from USB | Parts that need 5 V: PIR, ultrasonic, LM35, and the fan (through the wattmeter) |
-| **3V3** | 3.3 V | Parts that send an analog signal to the ESP32, plus the wattmeter's logic: light sensor, knob, SEN0291 "+" |
+| **VIN** (sometimes marked 5V) | About 5 V from USB | DFR0023 (LM35), and the DFR0411 motor through the wattmeter |
+| **3V3** | 3.3 V | Every other module |
 | **GND** | Ground | Everything. All grounds must be connected together. |
 
-Make a **5 V rail** (from VIN) and a **3.3 V rail** (from 3V3) on the breadboard's two + rows, and connect both − rows to GND.
-
-## Pin map
-
-| Part | Part pin | Goes to | Notes |
-|---|---|---|---|
-| **PIR** | VCC / GND / OUT | 5 V rail / GND / **GPIO27** | Its output is 3.3 V, so it's safe to connect directly |
-| **Ultrasonic** | VCC / GND | 5 V rail / GND | |
-| | TRIG | **GPIO18** | 3.3 V is enough to trigger it |
-| | ECHO | **GPIO19 through a divider** | See below. **Never connect it directly.** |
-| **LM35** (flat side facing you, legs down) | left / middle / right | 5 V rail / **GPIO34** / GND | Needs at least 4 V to work. Its output is only about 0.2–0.4 V, so it's safe. |
-| **Ambient light sensor** | VCC / GND / signal | 3.3 V rail / GND / **GPIO35** | Must be on 3.3 V so the signal can't exceed 3.3 V |
-| **Rotation sensor** (knob) | VCC / GND / signal | 3.3 V rail / GND / **GPIO32** | Same reason |
-| **SEN0291 wattmeter**, data side | + / − / C / D | **3.3 V rail** / GND / **GPIO22** (SCL) / **GPIO21** (SDA) | See [wattmeter-wiring.md](wattmeter-wiring.md) |
-| **Fan module** | VCC / GND / signal | Metered 5 V (wattmeter IN−) / GND / **GPIO25** | See [fan-wiring.md](fan-wiring.md) |
-| **LED 1** | long leg (+) | **GPIO26** → 220 Ω → LED | Short leg to GND |
-| **LED 2** | long leg (+) | **GPIO33** → 220 Ω → LED | Short leg to GND |
-| **Button B1** (lights) | two legs | **GPIO14** and GND | Uses the internal pull-up, no resistor needed |
-| **Button B2** (fan) | two legs | **GPIO13** and GND | |
-| **Button B3** (auto/manual) | two legs | **GPIO23** and GND | |
-
-## Ultrasonic ECHO divider
-
-The ECHO pin sends back 5 V. Two resistors bring that down to about 3.3 V:
-
-```
- ECHO ──[ 1 kΩ ]──┬── GPIO19
-                  │
-               [ 2 kΩ ]
-                  │
-                 GND
-```
-
-If you don't have a 2 kΩ resistor, use two 1 kΩ in series, or a 10 kΩ + 20 kΩ pair (always keep the smaller one on the ECHO side).
+Make a 5 V rail (from VIN) and a 3.3 V rail (from 3V3) on the breadboard, and connect both − rows to GND.
 
 ## Why these pins
 
-- **All analog inputs (GPIO32, 34, 35) are on ADC1.** The ESP32's second ADC stops working while Wi-Fi is on.
+- All analog inputs (GPIO32 to 35) are on ADC1, because ADC2 stops working while Wi-Fi is on.
+- The ultrasonic is on GPIO33 because GPIO32 and 33 are the only ADC1 pins with internal pull resistors, which the firmware uses to notice an unplugged sensor. That's why LED 2 is on GPIO19.
 - GPIO34 and 35 are input-only, which suits sensors.
 - Pins that affect booting (GPIO0, 2, 5, 12, 15) are avoided, so the board always starts normally.
-- GPIO6–11 are used by the board's flash memory and must never be connected.
 
-## Differences you'll notice from the Uno
+## Rules
 
-- **LEDs are a bit dimmer** because they run on 3.3 V. For more brightness, use 100 Ω resistors instead of 220 Ω (still safe).
-- **The LEDs aren't measured by the wattmeter.** On the ESP32 they have to be powered from the pin, so their current never passes through the meter. It's only about 5–10 mA each, which is tiny next to the fan. Leave `LEDS_ACTIVE_LOW = false` in `config.h`; the firmware refuses to build if it's set to true on an ESP32, to protect the pins.
-- **The LM35 is a little noisier** on the ESP32's ADC. The firmware averages 16 readings to smooth it out.
+- ESP32 pins take 3.3 V only. Every module whose output can reach its supply voltage runs on 3V3: SEN0307, DFR0026, DFR0058, SEN0018, the DFR0029 buttons and the DFR0021 LEDs.
+- The SEN0018 PIR outputs about 4 V when powered from 5 V, so it runs on 3V3 (DFRobot rates it for 3 to 5 V).
+- Only the DFR0023 (LM35) and the DFR0411 motor use 5 V. The LM35 chip needs at least 4 V, and its output is only 10 mV per °C, so GPIO34 is safe. The motor's signal is 3.3 V PWM from GPIO25.
+- The motor's 5 V goes through the SEN0291 (VIN → IN+ → IN− → motor VCC), so the wattmeter measures the fan.
+- The DFR0021 LEDs have their own driver and resistor, so no external resistor is needed. HIGH turns them on.
+- Each DFR0029 button has its own pull resistor and an indicator LED. Check with the serial monitor whether a press reads high or low before relying on the button logic.
+- All grounds join: the ESP32 GND, every module's GND and the motor's GND.
+- All analog inputs are on ADC1 (GPIO32 to 35) because ADC2 stops working while Wi-Fi is on. Keep GPIO0, 2, 5, 12 and 15 free, and never use GPIO6 to 11 (flash).
 
 ## Checklist before plugging in USB
 
-1. Nothing from the 5 V rail touches a GPIO directly, and ECHO goes through the divider.
-2. The light sensor, knob and SEN0291 "+" are on **3V3**, not VIN.
+1. Nothing from the 5 V rail touches a GPIO directly.
+2. Only the DFR0023 and the motor (through SEN0291 IN+/IN−) are on 5 V. Everything else is on 3V3.
 3. Every GND is connected together.
-4. Nothing is connected to GPIO6–11.
+4. Nothing is connected to GPIO6 to 11.
