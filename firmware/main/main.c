@@ -1,45 +1,28 @@
-// Test: PIR motion turns the fan on; 5 s without motion turns it off.
+// Smart Room firmware: occupancy, door, temperature and daylight control of
+// the lights and the fan ("AC"), with energy tracking and an MQTT link to the
+// digital twin.
+//
+// Tasks (higher number = higher priority):
+//   control  6  room rules and outputs, every 100 ms
+//   sensors  5  PIR, ultrasonic, LM35, light, knob, every 200 ms
+//   power    4  SEN0291 wattmeter, every 500 ms
+//   publish  3  telemetry, state, faults and events to MQTT and serial
+// Wi-Fi and MQTT run in their own ESP-IDF tasks and reconnect on their own.
+// Control never waits for a sensor or the network.
 
-#include <stdbool.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "esp_log.h"
-#include "board_pins.h"
-#include "pir.h"
-#include "fan.h"
+#include "room_data.h"
+#include "sensors.h"
+#include "control.h"
+#include "net.h"
 
-static const char *TAG = "pir_fan_test";
-
-#define FAN_OFF_DELAY_S 5.0f
+static const char *TAG = "main";
 
 void app_main(void)
 {
-    pir_config_t pir_cfg = PIR_DEFAULT_CONFIG(PIN_PIR);
-    pir_handle_t pir;
-    ESP_ERROR_CHECK(pir_create(&pir_cfg, &pir));
-
-    fan_config_t fan_cfg = FAN_DEFAULT_CONFIG(PIN_FAN);
-    fan_handle_t fan;
-    ESP_ERROR_CHECK(fan_create(&fan_cfg, &fan));
-
-    ESP_LOGI(TAG, "Ready. The PIR may trigger on its own for up to a minute while it settles.");
-
-    bool was_motion = false;
-    while (true) {
-        bool motion = pir_is_motion(pir);
-        if (motion != was_motion) {
-            ESP_LOGI(TAG, "PIR: %s", motion ? "motion" : "no motion");
-            was_motion = motion;
-        }
-
-        if (motion && !fan_is_on(fan)) {
-            fan_on(fan);
-            ESP_LOGI(TAG, "Fan ON");
-        } else if (!motion && fan_is_on(fan) && pir_seconds_since_motion(pir) >= FAN_OFF_DELAY_S) {
-            fan_off(fan);
-            ESP_LOGI(TAG, "Fan OFF (no motion for %.0f s)", FAN_OFF_DELAY_S);
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
+    ESP_LOGI(TAG, "Smart Room starting. The PIR may trigger on its own for up to a minute while it settles.");
+    room_data_init();
+    sensors_start();
+    net_start();
+    control_start();
 }

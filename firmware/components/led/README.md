@@ -11,7 +11,7 @@ Connect each LED as GPIO → 220 Ω resistor → long leg (+), with the short le
 | LED | ESP32 |
 |---|---|
 | LED 1 | GPIO26 (`PIN_LED1`) |
-| LED 2 | GPIO33 (`PIN_LED2`) |
+| LED 2 | GPIO19 (`PIN_LED2`) |
 
 For a brighter LED you can use 100 Ω instead of 220 Ω.
 

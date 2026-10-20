@@ -1,0 +1,25 @@
+menu "Smart Room"
+
+    config SMARTROOM_WIFI_SSID
+        string "Wi-Fi SSID"
+        default ""
+        help
+            Network to join. Leave empty to run without Wi-Fi (the room still
+            works and messages still go to the serial monitor). The value is
+            stored in sdkconfig, which git ignores.
+
+    config SMARTROOM_WIFI_PASSWORD
+        string "Wi-Fi password"
+        default ""
+
+    config SMARTROOM_MQTT_URI
+        string "MQTT broker URI"
+        default "mqtt://192.168.1.150:1883"
+
+    config SMARTROOM_ROOM_ID
+        string "Room id"
+        default "room1"
+        help
+            Topics are smartroom/<room id>/...
+
+endmenu

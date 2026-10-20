@@ -40,6 +40,14 @@ esp_err_t analog_in_read_mv(analog_in_handle_t handle, int *mv);
 
 bool analog_in_is_calibrated(analog_in_handle_t handle);
 
+// Checks that something drives the pin, by switching on the pin's internal
+// pull-up and then its pull-down for a moment. An unplugged (floating) input
+// follows the pulls to the top and bottom of the range; a sensor output barely
+// moves. Takes two reads plus about 0.2 ms. Meant for ADC_ATTEN_DB_12 inputs.
+// Only pins with internal pulls can do this: on the ESP32's ADC1 that's GPIO32
+// and GPIO33. Returns ESP_ERR_NOT_SUPPORTED on GPIO34..39.
+esp_err_t analog_in_check_driven(analog_in_handle_t handle, bool *driven);
+
 #ifdef __cplusplus
 }
 #endif

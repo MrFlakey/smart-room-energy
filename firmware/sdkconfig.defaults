@@ -1,0 +1,2 @@
+# Wi-Fi + MQTT need more than the default 1 MB app partition
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y

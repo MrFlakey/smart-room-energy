@@ -1,29 +1,85 @@
-# Smart Room drivers (ESP-IDF)
+# Smart Room firmware (ESP-IDF)
 
-Drivers for every sensor and actuator in the Smart Room, written for **ESP-IDF v6.0** on an **ESP32 DevKit v1**. There's no application code: `main/main.c` is an empty `app_main` for you to fill in.
+Firmware for the Smart Room on an **ESP32 DevKit v1**, written for **ESP-IDF v6.0**: the room application in `main/` and a driver component for every sensor and actuator in `components/`.
 
-Everything uses the current IDF drivers only (ADC oneshot with calibration, `i2c_master`, LEDC, GPIO, `esp_timer`), so nothing depends on the legacy drivers that v6 removed.
+Everything uses the current IDF drivers only (ADC oneshot with calibration, `i2c_master`, LEDC, GPIO, `esp_timer`), so nothing depends on the legacy drivers that v6 removed. MQTT and cJSON come from the component manager (`espressif/mqtt`, `espressif/cjson`), because v6 no longer bundles them.
 
 ## Layout
 
 ```
 firmware/
 ├── CMakeLists.txt          project file
+├── sdkconfig.defaults      1.5 MB app partition (Wi-Fi + MQTT don't fit in 1 MB)
 ├── main/
-│   ├── main.c              your code (empty app_main)
-│   └── board_pins.h        default pin map, change it to match your wiring
+│   ├── main.c              starts everything
+│   ├── app_config.h        timings, thresholds and energy constants
+│   ├── board_pins.h        default pin map, change it to match your wiring
+│   ├── room_data.*         data shared between the tasks
+│   ├── sensors.*           sensor and wattmeter tasks, fault detection
+│   ├── control.*           room rules, buttons, outputs, energy
+│   ├── net.*               Wi-Fi, MQTT, publishing
+│   ├── Kconfig.projbuild   "Smart Room" menu: Wi-Fi, broker, room id
+│   └── idf_component.yml   MQTT and cJSON
 └── components/
     ├── analog_in/          shared ADC helper used by the three analog drivers
     ├── lm35/               temperature
     ├── light_sensor/       ambient light
     ├── rotation_sensor/    knob
-    ├── hcsr04/             ultrasonic distance
+    ├── sen0307/            ultrasonic distance (DFRobot SEN0307)
     ├── pir/                motion
     ├── sen0291/            I2C wattmeter
     ├── button/             debounced pushbuttons
     ├── led/                dimmable LEDs
     └── fan/                PWM fan module
 ```
+
+## Application
+
+### Setup
+
+Wi-Fi and the broker are set in `idf.py menuconfig` → **Smart Room**: SSID, password, broker URI (default `mqtt://192.168.1.150:1883`) and room id (default `room1`). They are stored in `sdkconfig`, which git ignores, so credentials never get committed. With no SSID the board runs offline.
+
+### Tasks
+
+| Task | Priority | Period | Job |
+|---|---|---|---|
+| `control` | 6 | 100 ms | Room rules, buttons, commands, LEDs and fan, energy. Watched by the task watchdog. |
+| `sensors` | 5 | 200 ms | PIR, ultrasonic, LM35, light, knob, and their fault checks |
+| `power` | 4 | 500 ms | SEN0291 wattmeter; looks for it again every 10 s while it's missing |
+| `publish` | 3 | 100 ms | Telemetry every 2 s, state and faults on change, events, to MQTT and the serial monitor |
+
+Wi-Fi and MQTT run in ESP-IDF's own tasks. The control task only reads the latest sensor snapshot, so a failed sensor, a stuck I2C bus or a missing network never delays it. Wi-Fi retries with a growing delay (1 s up to 30 s) and the MQTT client reconnects every 5 s. On every connect the board publishes `online`, re-sends the retained `state` and `faults`, and sends any fault events that happened while it was offline. The broker publishes `offline` (Last Will) if the board drops.
+
+Every message also goes to the serial monitor, prefixed with its subtopic (`telemetry {...}`), so the room can be checked without a broker.
+
+### Behaviour
+
+The MQTT topics and payloads follow the twin's [`docs/mqtt-contract.md`](https://github.com/MrFlakey/Smart-Room-Digital-Twin/blob/main/docs/mqtt-contract.md). The numbers below are in `main/app_config.h`.
+
+- **Occupancy:** PIR motion; empty after 15 s without motion.
+- **Door:** the SEN0307 ultrasonic sensor faces the closed door; farther than 40 cm counts as open. The ESP32 reads anything closer than about 20 cm as about 20 cm, so keep the threshold above that. Open for 10 s pauses the fan in auto mode, and it resumes when the door closes. A fan override wins over the door: an overridden fan isn't paused.
+- **Setpoint:** the knob maps to 18–30 °C in 0.5 °C steps and only counts once it moves more than 0.5 °C. `{"set_c":..}` also sets it; the last change wins.
+- **Fan (auto):** starts 0.3 °C over the setpoint and stops at the setpoint. Speed runs from 30 % to 100 % at 3 °C over.
+- **Lights (auto):** both LEDs act as one light, on only while occupied, dimmed by daylight: 100 % below 10 % ambient, off above 60 %, smoothly in between.
+- **Buttons and commands:** B1 / `{"light":..}` toggles or sets the lights, B2 / `{"fan":..}` the fan, B3 / `{"mode":..}` switches auto/manual. In auto they set an override that ends when the room becomes empty or the mode changes. Pressing the button again while its device is overridden, or sending `{"light":"auto"}` / `{"fan":"auto"}`, ends the override and hands the device back to auto control.
+- **Faults (auto):** a failed LM35 turns the fan off, a failed light sensor the lights, a failed PIR both. Buttons and commands still work as overrides. While the PIR is failed an override lasts until switched off, the mode changes, or the PIR recovers and the room is empty.
+- **Energy:** power is the metered fan supply plus the LEDs estimated from brightness. `saved_pct` compares the energy used with both LEDs and the fan at full all the time (the fan's full-speed power is learned from the wattmeter). While the wattmeter is missing, `power_w` is `null` and energy keeps counting with an estimate.
+
+### Fault detection
+
+A sensor counts as failed after 5 bad readings in a row and as recovered after 15 good ones.
+
+| Sensor | Failed when |
+|---|---|
+| `pir` | Nothing drives the pin. Every 2 s the pull-down is briefly swapped for a pull-up; a connected PIR holds the line low, a loose wire goes high. |
+| `hcsr04` (the SEN0307; the key comes from the MQTT contract) | No reading, or nothing drives its pin. After every reading the pin's internal pull-up and pull-down are switched on in turn: an unplugged sensor follows them, a connected one holds its voltage. |
+| `lm35` | No reading, outside 1–60 °C, or a jump of more than 5 °C in 200 ms |
+| `light`, `rotation` | No reading, or the value jumps by more than 30 % four times within 3 s (a floating input) |
+| `sen0291` | Not found on I2C, or reads keep failing |
+
+The PIR, light and knob checks are heuristics: unplug each sensor once while watching the serial monitor to confirm they trip on your hardware, and adjust `app_config.h` if not.
+
+## Drivers
 
 Each driver has its own `README.md` in its folder; the full reference is also collected below. Every driver works the same way: fill a config struct (each has a `*_DEFAULT_CONFIG(...)` macro), call `*_create()` to get a handle, then call the read/set functions with that handle. All functions return `esp_err_t` (`ESP_OK` on success) unless they return a plain value. `main` can include any driver header directly, because IDF links every component into `main` automatically.
 
@@ -42,7 +98,7 @@ Defaults in `main/board_pins.h`. ESP32 pins are **3.3 V only**; nothing from the
 
 | Part | Pins | ESP32 |
 |---|---|---|
-| Ultrasonic | VCC / GND / TRIG / ECHO | 5 V (VIN) / GND / GPIO18 / **GPIO19 through a 1k/2k divider** |
+| Ultrasonic (DFRobot SEN0307) | + / − / A | **3V3** / GND / GPIO33 |
 | PIR | VCC / GND / OUT | 5 V / GND / GPIO27 |
 | LM35 (flat side facing you) | left / middle / right | 5 V / GPIO34 / GND |
 | Light sensor | VCC / GND / signal | **3V3** / GND / GPIO35 |
@@ -50,26 +106,16 @@ Defaults in `main/board_pins.h`. ESP32 pins are **3.3 V only**; nothing from the
 | SEN0291 data side | + / − / C / D | **3V3** / GND / GPIO22 (SCL) / GPIO21 (SDA), both address switches at 1 (0x45) |
 | SEN0291 power side | IN+ / IN− | VIN (5 V) in, fan VCC out |
 | Fan module | VCC / GND / signal | SEN0291 IN− (or VIN) / GND / GPIO25 |
-| LED 1 / LED 2 | long leg | GPIO26 / GPIO33, each through 220 Ω; short leg to GND |
+| LED 1 / LED 2 | long leg | GPIO26 / GPIO19, each through 220 Ω; short leg to GND |
 | Buttons 1 / 2 / 3 | two legs | GPIO14 / GPIO13 / GPIO23 and GND (internal pull-ups) |
 
-Ultrasonic ECHO divider:
-
-```
- ECHO ──[ 1 kΩ ]──┬── GPIO19
-                  │
-               [ 2 kΩ ]
-                  │
-                 GND
-```
-
-All analog inputs are on ADC1 on purpose: ADC2 stops working while Wi-Fi is on. Avoid GPIO0, 2, 5, 12 and 15 (they affect booting) and never use GPIO6 to 11 (flash).
+All analog inputs are on ADC1 on purpose: ADC2 stops working while Wi-Fi is on. The ultrasonic is on GPIO33 because GPIO32 and 33 are the only ADC1 pins with internal pull resistors, which the unplugged-sensor check needs. Avoid GPIO0, 2, 5, 12 and 15 (they affect booting) and never use GPIO6 to 11 (flash).
 
 ## Driver reference
 
 Each section below is the same as the `README.md` in that driver's folder.
 
-Contents: [lm35](#lm35), [light_sensor](#light_sensor), [rotation_sensor](#rotation_sensor), [hcsr04](#hcsr04), [pir](#pir), [sen0291](#sen0291), [button](#button), [led](#led), [fan](#fan), [analog_in](#analog_in)
+Contents: [lm35](#lm35), [light_sensor](#light_sensor), [rotation_sensor](#rotation_sensor), [sen0307](#sen0307), [pir](#pir), [sen0291](#sen0291), [button](#button), [led](#led), [fan](#fan), [analog_in](#analog_in)
 
 ### lm35
 
@@ -271,85 +317,78 @@ if (rotation_sensor_read_percent(sensor, &pct) == ESP_OK) {
 
 Turn the knob fully to each end and note `rotation_sensor_read_mv()` at each. Put those values in `min_mv` and `max_mv` to get a full 0 to 100 % sweep. If turning clockwise makes the reading go down, set `invert = true`.
 
-### hcsr04
+### sen0307
 
 **Ultrasonic distance sensor**
 
-Driver for HC-SR04 style ultrasonic sensors. It sends a 10 µs trigger pulse, then times the echo pulse with a GPIO interrupt and `esp_timer`, to 1 µs resolution. The calling task only waits until the echo comes back, or until the timeout.
+Driver for the DFRobot SEN0307 (Gravity URM09, analog version). The module measures distance itself, up to 30 times a second with built-in temperature compensation, and outputs a voltage that grows with distance. The driver reads that voltage through `analog_in` and converts it with the datasheet formula: distance (cm) = Vout (mV) × 520 / Vsupply (mV).
 
-Header: `hcsr04.h` · Depends on: `esp_driver_gpio`, `esp_timer`
+Header: `sen0307.h` · Depends on: [`analog_in`](components/analog_in/README.md)
 
 #### Wiring
 
-| HC-SR04 pin | ESP32 |
+| Sensor pin | ESP32 |
 |---|---|
-| VCC | 5 V (VIN) |
-| GND | GND |
-| TRIG | GPIO18 (`PIN_US_TRIG`) |
-| ECHO | GPIO19 (`PIN_US_ECHO`) **through a divider** |
+| + | **3V3** (not 5 V) |
+| − | GND |
+| A | GPIO33 (`PIN_ULTRASONIC`) |
 
-ECHO outputs 5 V, which would damage the ESP32. Bring it down with two resistors:
+The module runs on 3.3 to 5.5 V. Power it from 3V3: its output can reach the supply voltage, and 5 V would damage the ESP32 pin. No divider is needed.
 
-```
- ECHO ──[ 1 kΩ ]──┬── GPIO19
-                  │
-               [ 2 kΩ ]
-                  │
-                 GND
-```
+GPIO33 is used because it's one of the two ADC1 pins with internal pull resistors (GPIO32 and GPIO33), which `sen0307_check_connected()` needs. Any other ADC1 pin works for reading distances.
 
-#### Configuration: `hcsr04_config_t`
+#### Configuration: `sen0307_config_t`
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `trig_gpio` | `int` | the pin you pass | Output pin to TRIG. |
-| `echo_gpio` | `int` | the pin you pass | Input pin from ECHO, through the divider. The internal pull-down is enabled. |
-| `timeout_ms` | `uint32_t` | `30` | How long to wait for an echo. 30 ms covers about 5 m. 0 means 30. |
-| `air_temp_c` | `float` | `20.0` | Air temperature used to work out the speed of sound. |
+| `gpio` | `int` | the pin you pass | ADC pin connected to A. |
+| `samples` | `int` | `16` | Readings averaged per call. |
+| `supply_mv` | `int` | `3300` | The sensor's supply voltage. Its output scales with it, so this must match how it's powered. |
+| `range_cm` | `float` | `520` | Distance at full output, from the datasheet formula. |
 
-Get the defaults with `HCSR04_DEFAULT_CONFIG(trig, echo)`.
+Get the defaults with `SEN0307_DEFAULT_CONFIG(pin)`. The ADC always uses the 12 dB range, which is about 0 to 3.1 V, or about 0 to 490 cm on a 3.3 V supply.
 
 #### Functions
 
-##### `esp_err_t hcsr04_create(const hcsr04_config_t *config, hcsr04_handle_t *ret_handle)`
-Sets up both pins and the echo interrupt, and returns a handle. It installs the shared GPIO interrupt service if it isn't installed yet. Returns `ESP_ERR_INVALID_ARG` or `ESP_ERR_NO_MEM` on failure.
+##### `esp_err_t sen0307_create(const sen0307_config_t *config, sen0307_handle_t *ret_handle)`
+Sets up the sensor and returns a handle. Returns `ESP_ERR_INVALID_ARG` for a NULL argument, a non-ADC pin, or a `supply_mv` or `range_cm` that isn't above 0. Returns `ESP_ERR_NO_MEM` if memory runs out.
 
-##### `esp_err_t hcsr04_delete(hcsr04_handle_t handle)`
-Removes the interrupt, resets both pins and frees the sensor.
+##### `esp_err_t sen0307_delete(sen0307_handle_t handle)`
+Frees the sensor and its ADC input.
 
-##### `esp_err_t hcsr04_measure_us(hcsr04_handle_t handle, uint32_t *echo_us)`
-Sends one ping and writes the echo pulse length in microseconds. Returns `ESP_ERR_TIMEOUT` if no echo arrives within `timeout_ms`. That means nothing is in range, or ECHO isn't connected.
+##### `esp_err_t sen0307_read_mv(sen0307_handle_t handle, int *mv)`
+Writes the average output voltage in millivolts.
 
-##### `esp_err_t hcsr04_measure_cm(hcsr04_handle_t handle, float *distance_cm)`
-Sends one ping and writes the distance in centimetres. The speed of sound is (331.3 + 0.606 × `air_temp_c`) m/s, halved because the sound goes there and back. Returns `ESP_ERR_TIMEOUT` like `measure_us`.
+##### `esp_err_t sen0307_read_cm(sen0307_handle_t handle, float *distance_cm)`
+Writes the distance in centimetres: `mv × range_cm / supply_mv`.
 
-##### `void hcsr04_set_air_temp(hcsr04_handle_t handle, float celsius)`
-Updates the air temperature used by `measure_cm`. The speed of sound changes about 0.17 % per °C, so feeding in the LM35 reading makes distances slightly more accurate.
+##### `esp_err_t sen0307_check_connected(sen0307_handle_t handle, bool *connected)`
+Writes false if nothing drives the A pin, which is what happens when the cable is unplugged. It switches on the pin's internal pull-up and then its pull-down for a moment: a loose wire follows them to 3.3 V and 0 V, while the sensor's output holds its voltage. Takes two reads plus about 0.2 ms. Returns `ESP_ERR_NOT_SUPPORTED` on GPIO34 to 39, which have no internal pulls.
 
 #### Example
 
 ```c
 #include "board_pins.h"
-#include "hcsr04.h"
+#include "sen0307.h"
 
-hcsr04_config_t cfg = HCSR04_DEFAULT_CONFIG(PIN_US_TRIG, PIN_US_ECHO);
-hcsr04_handle_t us;
-ESP_ERROR_CHECK(hcsr04_create(&cfg, &us));
+sen0307_config_t cfg = SEN0307_DEFAULT_CONFIG(PIN_ULTRASONIC);
+sen0307_handle_t us;
+ESP_ERROR_CHECK(sen0307_create(&cfg, &us));
 
+bool connected;
 float cm;
-esp_err_t err = hcsr04_measure_cm(us, &cm);
-if (err == ESP_OK) {
-    printf("%.1f cm\n", cm);
-} else if (err == ESP_ERR_TIMEOUT) {
-    printf("nothing in range\n");
+if (sen0307_check_connected(us, &connected) == ESP_OK && !connected) {
+    printf("sensor unplugged\n");
+} else if (sen0307_read_cm(us, &cm) == ESP_OK) {
+    printf("%.0f cm\n", cm);
 }
 ```
 
 #### Notes
 
-- Leave at least 60 ms between pings, so echoes from the last ping have died out.
-- One ping at a time per sensor. Calls from several tasks are safe, because they queue up.
-- Useful range is about 2 cm to 4 m. Soft or angled surfaces may not reflect enough to measure.
+- The ESP32 ADC can't read the bottom ~140 mV of its range, so anything closer than about 20 cm reads as about 20 cm. Keep the threshold you compare against above that.
+- The sensor's measuring range is 2 to 500 cm, with 1 cm resolution. Soft or angled surfaces may not reflect enough to measure.
+- If the 3V3 rail isn't close to 3.3 V, measure it and set `supply_mv` to match.
 
 ### pir
 
@@ -643,7 +682,7 @@ Connect each LED as GPIO → 220 Ω resistor → long leg (+), with the short le
 | LED | ESP32 |
 |---|---|
 | LED 1 | GPIO26 (`PIN_LED1`) |
-| LED 2 | GPIO33 (`PIN_LED2`) |
+| LED 2 | GPIO19 (`PIN_LED2`) |
 
 For a brighter LED you can use 100 Ω instead of 220 Ω.
 
@@ -790,9 +829,9 @@ fan_off(fan);
 
 **Shared ADC helper**
 
-Reads one analog pin and returns calibrated millivolts, using the ESP-IDF ADC oneshot driver. The `lm35`, `light_sensor` and `rotation_sensor` drivers are built on it. Inputs on the same ADC unit share one unit handle, which is what lets those three sensors all use ADC1 together. You only need to use it directly for an analog part that has no driver of its own.
+Reads one analog pin and returns calibrated millivolts, using the ESP-IDF ADC oneshot driver. The `lm35`, `light_sensor`, `rotation_sensor` and `sen0307` drivers are built on it. Inputs on the same ADC unit share one unit handle, which is what lets those sensors all use ADC1 together. You only need to use it directly for an analog part that has no driver of its own.
 
-Header: `analog_in.h` · Depends on: `esp_adc`
+Header: `analog_in.h` · Depends on: `esp_adc`, `esp_driver_gpio`
 
 #### Pins
 
@@ -824,6 +863,9 @@ Writes the average reading in millivolts to `mv`. Uses the factory calibration i
 
 ##### `bool analog_in_is_calibrated(analog_in_handle_t handle)`
 Returns true if readings use the factory calibration. False means `read_mv` is an estimate.
+
+##### `esp_err_t analog_in_check_driven(analog_in_handle_t handle, bool *driven)`
+Writes false if nothing drives the pin, which is what an unplugged sensor looks like. It switches on the pin's internal pull-up and then its pull-down for a moment and reads both times: a floating pin follows them to the top and bottom of the range, while a sensor output barely moves. Takes two reads plus about 0.2 ms, and is meant for inputs on the 12 dB range. Only pins with internal pulls can do this, which on the ESP32's ADC1 means GPIO32 and GPIO33. Returns `ESP_ERR_NOT_SUPPORTED` on GPIO34 to 39.
 
 #### Example
 

@@ -1,8 +1,8 @@
 # analog_in: shared ADC helper
 
-Reads one analog pin and returns calibrated millivolts, using the ESP-IDF ADC oneshot driver. The `lm35`, `light_sensor` and `rotation_sensor` drivers are built on it. Inputs on the same ADC unit share one unit handle, which is what lets those three sensors all use ADC1 together. You only need to use it directly for an analog part that has no driver of its own.
+Reads one analog pin and returns calibrated millivolts, using the ESP-IDF ADC oneshot driver. The `lm35`, `light_sensor`, `rotation_sensor` and `sen0307` drivers are built on it. Inputs on the same ADC unit share one unit handle, which is what lets those sensors all use ADC1 together. You only need to use it directly for an analog part that has no driver of its own.
 
-Header: `analog_in.h` · Depends on: `esp_adc`
+Header: `analog_in.h` · Depends on: `esp_adc`, `esp_driver_gpio`
 
 ## Pins
 
@@ -34,6 +34,9 @@ Writes the average reading in millivolts to `mv`. Uses the factory calibration i
 
 ### `bool analog_in_is_calibrated(analog_in_handle_t handle)`
 Returns true if readings use the factory calibration. False means `read_mv` is an estimate.
+
+### `esp_err_t analog_in_check_driven(analog_in_handle_t handle, bool *driven)`
+Writes false if nothing drives the pin, which is what an unplugged sensor looks like. It switches on the pin's internal pull-up and then its pull-down for a moment and reads both times: a floating pin follows them to the top and bottom of the range, while a sensor output barely moves. Takes two reads plus about 0.2 ms, and is meant for inputs on the 12 dB range. Only pins with internal pulls can do this, which on the ESP32's ADC1 means GPIO32 and GPIO33. Returns `ESP_ERR_NOT_SUPPORTED` on GPIO34 to 39.
 
 ## Example
 
