@@ -2,16 +2,15 @@
 // Wiring details: README.md, "Wiring".
 #pragma once
 
-// Ultrasonic (HC-SR04 style). ECHO goes through a 1k/2k divider.
-#define PIN_US_TRIG     18
-#define PIN_US_ECHO     19
-
 #define PIN_PIR         27
 
 // Analog inputs, all on ADC1 (ADC2 stops working while Wi-Fi is on)
 #define PIN_LM35        34
 #define PIN_LIGHT       35
 #define PIN_ROTATION    32
+// Ultrasonic: DFRobot SEN0307 (analog URM09), powered from 3V3. GPIO33 has
+// internal pulls, which the unplugged-sensor check needs.
+#define PIN_ULTRASONIC  33
 
 // SEN0291 wattmeter (I2C)
 #define PIN_I2C_SDA     21
@@ -20,7 +19,7 @@
 
 #define PIN_FAN         25
 #define PIN_LED1        26
-#define PIN_LED2        33
+#define PIN_LED2        19
 
 // Buttons connect the pin to GND; internal pull-ups are used
 #define PIN_BTN1        14

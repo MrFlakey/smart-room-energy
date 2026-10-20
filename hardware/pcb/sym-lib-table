@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "SmartRoom")(type "KiCad")(uri "${KIPRJMOD}/SmartRoom.kicad_sym")(options "")(descr "Smart Room carrier symbols"))
+)

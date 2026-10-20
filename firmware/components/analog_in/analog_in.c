@@ -4,18 +4,27 @@
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
+#include "driver/gpio.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_rom_sys.h"
 
 static const char *TAG = "analog_in";
 
 #define MAX_UNITS 2
+
+// analog_in_check_driven: pulled up, a floating pin reads at the top of the
+// range; pulled down, at the bottom. Raw 12-bit values.
+#define FLOATING_HIGH_RAW 3900
+#define FLOATING_LOW_RAW  200
+#define PULL_SETTLE_US    100
 
 // One oneshot unit handle per ADC unit, shared by every input on that unit
 static adc_oneshot_unit_handle_t s_units[MAX_UNITS];
 static int s_unit_refs[MAX_UNITS];
 
 struct analog_in_t {
+    int gpio;
     adc_unit_t unit;
     adc_channel_t channel;
     adc_atten_t atten;
@@ -101,6 +110,7 @@ esp_err_t analog_in_create(const analog_in_config_t *config, analog_in_handle_t 
     ESP_RETURN_ON_FALSE(in, ESP_ERR_NO_MEM, TAG, "out of memory");
     in->unit = unit;
     in->channel = channel;
+    in->gpio = config->gpio;
     in->atten = config->atten;
     in->samples = config->samples > 0 ? config->samples : 1;
 
@@ -179,4 +189,29 @@ esp_err_t analog_in_read_mv(analog_in_handle_t handle, int *mv)
 bool analog_in_is_calibrated(analog_in_handle_t handle)
 {
     return handle && handle->cali;
+}
+
+esp_err_t analog_in_check_driven(analog_in_handle_t handle, bool *driven)
+{
+    ESP_RETURN_ON_FALSE(handle && driven, ESP_ERR_INVALID_ARG, TAG, "null argument");
+    // GPIO34..39 are input-only and have no internal pulls
+    if (!GPIO_IS_VALID_OUTPUT_GPIO(handle->gpio)) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    int up = 0, down = 0;
+    gpio_set_pull_mode(handle->gpio, GPIO_PULLUP_ONLY);
+    esp_rom_delay_us(PULL_SETTLE_US);
+    esp_err_t err = analog_in_read_raw(handle, &up);
+    if (err == ESP_OK) {
+        gpio_set_pull_mode(handle->gpio, GPIO_PULLDOWN_ONLY);
+        esp_rom_delay_us(PULL_SETTLE_US);
+        err = analog_in_read_raw(handle, &down);
+    }
+    // Back to floating, as an analog input should be
+    gpio_set_pull_mode(handle->gpio, GPIO_FLOATING);
+    ESP_RETURN_ON_ERROR(err, TAG, "read failed");
+
+    *driven = !(up >= FLOATING_HIGH_RAW && down <= FLOATING_LOW_RAW);
+    return ESP_OK;
 }

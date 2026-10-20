@@ -4,7 +4,7 @@ Author: Mohamed Khamis
 
 A smart room that saves energy on its own. An ESP32 watches occupancy, the door, temperature, daylight and power use, then switches the lights and the "AC" (a DC fan) only when they are needed. Everything is shown live on a 3D digital twin over MQTT: [Smart-Room-Digital-Twin](https://github.com/MrFlakey/Smart-Room-Digital-Twin).
 
-This repository holds the ESP-IDF driver components for every sensor and actuator in the room.
+This repository holds the ESP32 firmware: the room application and an ESP-IDF driver component for every sensor and actuator. How the firmware is organised (tasks, fault detection, settings) is in [`firmware/README.md`](firmware/README.md).
 
 ## How the room behaves
 
@@ -22,7 +22,7 @@ This repository holds the ESP-IDF driver components for every sensor and actuato
 |---|---|
 | Board | ESP32 DevKit v1 |
 | Motion | PIR sensor |
-| Door | HC-SR04 style ultrasonic sensor |
+| Door | DFRobot SEN0307 ultrasonic sensor (URM09, analog) |
 | Temperature | LM35 |
 | Ambient light | analog light sensor |
 | Target temperature | rotation sensor (potentiometer) |
@@ -31,7 +31,7 @@ This repository holds the ESP-IDF driver components for every sensor and actuato
 | Lights | 2 LEDs |
 | AC | DC fan module |
 
-The pin map is in [`firmware/main/board_pins.h`](firmware/main/board_pins.h) and the full wiring table is in [`firmware/README.md`](firmware/README.md). ESP32 pins are 3.3 V only; the ultrasonic ECHO line needs a 1 kΩ / 2 kΩ divider.
+The pin map is in [`firmware/main/board_pins.h`](firmware/main/board_pins.h) and the full wiring table is in [`firmware/README.md`](firmware/README.md). ESP32 pins are 3.3 V only, so the parts that send an analog signal (light sensor, knob, ultrasonic) run from 3V3.
 
 ## Drivers
 
@@ -43,7 +43,7 @@ Written for **ESP-IDF v6.0** using only the current IDF drivers (ADC oneshot wit
 | `lm35` | temperature |
 | `light_sensor` | ambient light |
 | `rotation_sensor` | target temperature knob |
-| `hcsr04` | ultrasonic distance |
+| `sen0307` | ultrasonic distance (door) |
 | `pir` | motion |
 | `sen0291` | I2C wattmeter |
 | `button` | debounced pushbuttons with callbacks |
@@ -56,20 +56,22 @@ Every driver works the same way: fill a config struct with its `*_DEFAULT_CONFIG
 
 1. Install ESP-IDF v6.0 (for example with the ESP-IDF VS Code extension).
 2. Open the `firmware` folder.
-3. Set the target to `esp32`, pick the board's serial port, then **Build, Flash and Monitor**.
+3. Set the Wi-Fi network in **menuconfig → Smart Room** (stored in the git-ignored `sdkconfig`).
+4. Set the target to `esp32`, pick the board's serial port, then **Build, Flash and Monitor**.
 
 From a terminal with ESP-IDF loaded:
 
 ```
 cd firmware
 idf.py set-target esp32
+idf.py menuconfig
 idf.py -p <PORT> flash monitor
 ```
 
 ## Branches
 
 - `main`: the driver components with an empty `app_main`.
-- `testing`: hardware tests (PIR + fan) and per-driver documentation.
+- `testing`: the room application, hardware tests and per-driver documentation.
 
 ## Network
 

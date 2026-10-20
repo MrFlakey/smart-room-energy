@@ -1,27 +1,28 @@
-// Your application goes here. The drivers live in components/ and the pin map
-// in board_pins.h; README.md shows how to use each driver.
+// Smart Room firmware: occupancy, door, temperature and daylight control of
+// the lights and the fan ("AC"), with energy tracking and an MQTT link to the
+// digital twin.
 //
-// Quick start, for example:
-//
-//   #include "board_pins.h"
-//   #include "lm35.h"
-//   #include "fan.h"
-//
-//   lm35_config_t t_cfg = LM35_DEFAULT_CONFIG(PIN_LM35);
-//   lm35_handle_t temp;
-//   ESP_ERROR_CHECK(lm35_create(&t_cfg, &temp));
-//
-//   fan_config_t f_cfg = FAN_DEFAULT_CONFIG(PIN_FAN);
-//   fan_handle_t fan;
-//   ESP_ERROR_CHECK(fan_create(&f_cfg, &fan));
-//
-//   float c;
-//   if (lm35_read_celsius(temp, &c) == ESP_OK && c > 28.0f) {
-//       fan_set_percent(fan, 80);
-//   }
+// Tasks (higher number = higher priority):
+//   control  6  room rules and outputs, every 100 ms
+//   sensors  5  PIR, ultrasonic, LM35, light, knob, every 200 ms
+//   power    4  SEN0291 wattmeter, every 500 ms
+//   publish  3  telemetry, state, faults and events to MQTT and serial
+// Wi-Fi and MQTT run in their own ESP-IDF tasks and reconnect on their own.
+// Control never waits for a sensor or the network.
 
-#include "board_pins.h"
+#include "esp_log.h"
+#include "room_data.h"
+#include "sensors.h"
+#include "control.h"
+#include "net.h"
+
+static const char *TAG = "main";
 
 void app_main(void)
 {
+    ESP_LOGI(TAG, "Smart Room starting. The PIR may trigger on its own for up to a minute while it settles.");
+    room_data_init();
+    sensors_start();
+    net_start();
+    control_start();
 }
